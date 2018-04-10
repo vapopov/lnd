@@ -39,6 +39,9 @@ var (
 			// The base DB version requires no migration.
 			number:    0,
 			migration: nil,
+		}, {
+			number:    1,
+			migration: paymentStatusesMigration,
 		},
 	}
 

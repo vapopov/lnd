@@ -2,25 +2,24 @@ package htlcswitch
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"crypto/sha256"
-
 	"github.com/coreos/bbolt"
 	"github.com/davecgh/go-spew/spew"
-	"github.com/roasbeef/btcd/btcec"
-
 	"github.com/go-errors/errors"
+	"github.com/roasbeef/btcd/btcec"
+	"github.com/roasbeef/btcd/wire"
+	"github.com/roasbeef/btcutil"
+
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/contractcourt"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
-	"github.com/roasbeef/btcd/wire"
-	"github.com/roasbeef/btcutil"
 )
 
 var (
@@ -164,6 +163,9 @@ type Switch struct {
 
 	paymentSequencer Sequencer
 
+	// control provides verification of sending htlc mesages
+	control ControlTower
+
 	// circuits is storage for payment circuits which are used to
 	// forward the settle/fail htlc updates back to the add htlc initiator.
 	circuits CircuitMap
@@ -236,10 +238,13 @@ func New(cfg Config) (*Switch, error) {
 		return nil, err
 	}
 
+	pControl := NewPaymentControl(cfg.DB)
+
 	return &Switch{
 		cfg:               &cfg,
 		circuits:          circuitMap,
 		paymentSequencer:  sequencer,
+		control:           pControl,
 		linkIndex:         make(map[lnwire.ChannelID]ChannelLink),
 		mailboxes:         make(map[lnwire.ShortChannelID]MailBox),
 		forwardingIndex:   make(map[lnwire.ShortChannelID]ChannelLink),
@@ -292,6 +297,11 @@ func (s *Switch) ProcessContractResolution(msg contractcourt.ResolutionMsg) erro
 // package in order to send the htlc update.
 func (s *Switch) SendHTLC(nextNode [33]byte, htlc *lnwire.UpdateAddHTLC,
 	deobfuscator ErrorDecrypter) ([sha256.Size]byte, error) {
+
+	// verify message by ControlTower implementation
+	if err := s.control.CheckSend(htlc); err != nil {
+		return zeroPreimage, err
+	}
 
 	// Create payment and add to the map of payment in order later to be
 	// able to retrieve it and return response to the user.
@@ -773,6 +783,10 @@ func (s *Switch) handleLocalDispatch(pkt *htlcPacket) error {
 		payment.preimage <- htlc.PaymentPreimage
 		s.removePendingPayment(pkt.incomingHTLCID)
 
+		if err := s.control.Success(pkt.circuit.PaymentHash); err != nil {
+			return err
+		}
+
 	// We've just received a fail update which means we can finalize the
 	// user payment and return fail response.
 	case *lnwire.UpdateFailHTLC:
@@ -780,6 +794,10 @@ func (s *Switch) handleLocalDispatch(pkt *htlcPacket) error {
 		payment.response <- pkt
 		payment.preimage <- zeroPreimage
 		s.removePendingPayment(pkt.incomingHTLCID)
+
+		if err := s.control.Fail(pkt.circuit.PaymentHash); err != nil {
+			return err
+		}
 
 	default:
 		return errors.New("wrong update type")
