@@ -28,6 +28,7 @@ import (
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/routing"
+	"github.com/lightningnetwork/lnd/strayoutputpool"
 	"github.com/lightningnetwork/lnd/tor"
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
@@ -135,6 +136,8 @@ type server struct {
 	sphinx *htlcswitch.OnionProcessor
 
 	connMgr *connmgr.ConnManager
+
+	strayOutputsPool strayoutputpool.StrayOutputsPool
 
 	// globalFeatures feature vector which affects HTLCs and thus are also
 	// advertised to other nodes.
@@ -454,6 +457,20 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 		return nil, err
 	}
 
+	// Create outputs pool manager responsible for gathering outputs and
+	// merging them to one transaction
+	s.strayOutputsPool = strayoutputpool.NewDBStrayOutputsPool(&strayoutputpool.PoolConfig{
+		DB:   chanDB,
+		Estimator: s.cc.feeEstimator,
+		GenSweepScript: func() ([]byte, error) {
+			return newSweepPkScript(cc.wallet)
+		},
+		Notifier:           cc.chainNotifier,
+		PublishTransaction: cc.wallet.PublishTransaction,
+		Signer:             cc.wallet.Cfg.Signer,
+		DustLimit: 			lnwallet.DefaultDustLimit(),
+	})
+
 	utxnStore, err := newNurseryStore(activeNetParams.GenesisHash, chanDB)
 	if err != nil {
 		srvrLog.Errorf("unable to create nursery store: %v", err)
@@ -468,10 +485,14 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 		GenSweepScript: func() ([]byte, error) {
 			return newSweepPkScript(cc.wallet)
 		},
+		CutStrayTxInputs: func(tx *btcutil.Tx) error {
+			return strayoutputpool.CutStrayInputs(s.strayOutputsPool, tx)
+		},
 		Notifier:           cc.chainNotifier,
 		PublishTransaction: cc.wallet.PublishTransaction,
 		Signer:             cc.wallet.Cfg.Signer,
 		Store:              utxnStore,
+		StrayOutputsPool:   s.strayOutputsPool,
 	})
 
 	// Construct a closure that wraps the htlcswitch's CloseLink method.
@@ -566,6 +587,9 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 		CloseLink: closeLink,
 		DB:        chanDB,
 		Estimator: s.cc.feeEstimator,
+		CutStrayTxInputs: func(tx *btcutil.Tx) error {
+			return strayoutputpool.CutStrayInputs(s.strayOutputsPool, tx)
+		},
 		GenSweepScript: func() ([]byte, error) {
 			return newSweepPkScript(cc.wallet)
 		},
@@ -645,6 +669,9 @@ func (s *server) Start() error {
 	if err := s.chanRouter.Start(); err != nil {
 		return err
 	}
+	if err := s.strayOutputsPool.Start(); err != nil {
+		return err
+	}
 
 	// With all the relevant sub-systems started, we'll now attempt to
 	// establish persistent connections to our direct channel collaborators
@@ -704,6 +731,7 @@ func (s *server) Stop() error {
 	s.cc.chainView.Stop()
 	s.connMgr.Stop()
 	s.cc.feeEstimator.Stop()
+	s.strayOutputsPool.Stop()
 
 	// Disconnect from each active peers to ensure that
 	// peerTerminationWatchers signal completion to each peer.
