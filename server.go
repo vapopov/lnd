@@ -485,10 +485,10 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 		GenSweepScript: func() ([]byte, error) {
 			return newSweepPkScript(cc.wallet)
 		},
-		CutStrayInputs: func(feeRate lnwallet.SatPerVByte,
-			inputs []lnwallet.SpendableOutput) []lnwallet.SpendableOutput {
-			return strayoutputpool.CutStrayInputs(s.strayOutputsPool,
-				feeRate, inputs)
+		CutStrayInput: func(feeRate lnwallet.SatPerVByte,
+			input lnwallet.SpendableOutput) bool {
+				return strayoutputpool.CutStrayInput(s.strayOutputsPool,
+					feeRate, input)
 		},
 		Notifier:           cc.chainNotifier,
 		PublishTransaction: cc.wallet.PublishTransaction,
@@ -588,10 +588,10 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 		CloseLink: closeLink,
 		DB:        chanDB,
 		Estimator: s.cc.feeEstimator,
-		CutStrayInputs: func(feeRate lnwallet.SatPerVByte,
-			inputs []lnwallet.SpendableOutput) []lnwallet.SpendableOutput {
-			return strayoutputpool.CutStrayInputs(s.strayOutputsPool,
-				feeRate, inputs)
+		CutStrayInput: func(feeRate lnwallet.SatPerVByte,
+			input lnwallet.SpendableOutput) bool {
+			return strayoutputpool.CutStrayInput(s.strayOutputsPool,
+				feeRate, input)
 		},
 		GenSweepScript: func() ([]byte, error) {
 			return newSweepPkScript(cc.wallet)
