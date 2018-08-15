@@ -1,6 +1,6 @@
 // +build !rpctest
 
-package main
+package nursery
 
 import (
 	"io/ioutil"
@@ -9,8 +9,21 @@ import (
 	"testing"
 
 	"github.com/btcsuite/btclog"
-	"github.com/lightningnetwork/lnd/channeldb"
+	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcd/wire"
+
+	"github.com/lightningnetwork/lnd/channeldb"
+)
+
+var (
+	// bitcoinTestnetGenesis is the genesis hash of Bitcoin's testnet
+	// chain.
+	bitcoinTestnetGenesis = chainhash.Hash([chainhash.HashSize]byte{
+		0x43, 0x49, 0x7f, 0xd7, 0xf8, 0x26, 0x95, 0x71,
+		0x08, 0xf4, 0xa3, 0x0f, 0xd9, 0xce, 0xc3, 0xae,
+		0xba, 0x79, 0x97, 0x20, 0x84, 0xe9, 0x0e, 0xad,
+		0x01, 0xea, 0x33, 0x09, 0x00, 0x00, 0x00, 0x00,
+	})
 )
 
 func init() {
@@ -88,7 +101,7 @@ func TestNurseryStoreInit(t *testing.T) {
 	}
 	defer cleanUp()
 
-	ns, err := newNurseryStore(&bitcoinTestnetGenesis, cdb)
+	ns, err := NewNurseryStore(&bitcoinTestnetGenesis, cdb)
 	if err != nil {
 		t.Fatalf("unable to open nursery store: %v", err)
 	}
@@ -110,7 +123,7 @@ func TestNurseryStoreIncubate(t *testing.T) {
 	}
 	defer cleanUp()
 
-	ns, err := newNurseryStore(&bitcoinTestnetGenesis, cdb)
+	ns, err := NewNurseryStore(&bitcoinTestnetGenesis, cdb)
 	if err != nil {
 		t.Fatalf("unable to open nursery store: %v", err)
 	}
@@ -164,7 +177,7 @@ func TestNurseryStoreIncubate(t *testing.T) {
 		assertCanRemoveChannel(t, ns, test.chanPoint, false)
 
 		// Verify that the htlc outputs, if any, reside in the height
-		// index at their first stage CLTV's expiry height.
+		// index at their first Stage CLTV's expiry height.
 		for _, htlcOutput := range test.htlcOutputs {
 			assertCribAtExpiryHeight(t, ns, &htlcOutput)
 		}
@@ -242,7 +255,7 @@ func TestNurseryStoreIncubate(t *testing.T) {
 		}
 
 		// If there are any htlc outputs to incubate, we will walk them
-		// through their two-stage incubation process.
+		// through their two-Stage incubation process.
 		if len(test.htlcOutputs) > 0 {
 			for i, htlcOutput := range test.htlcOutputs {
 				// Begin by moving each htlc output from the
@@ -350,7 +363,7 @@ func TestNurseryStoreFinalize(t *testing.T) {
 	}
 	defer cleanUp()
 
-	ns, err := newNurseryStore(&bitcoinTestnetGenesis, cdb)
+	ns, err := NewNurseryStore(&bitcoinTestnetGenesis, cdb)
 	if err != nil {
 		t.Fatalf("unable to open nursery store: %v", err)
 	}
@@ -437,7 +450,7 @@ func TestNurseryStoreGraduate(t *testing.T) {
 	}
 	defer cleanUp()
 
-	ns, err := newNurseryStore(&bitcoinTestnetGenesis, cdb)
+	ns, err := NewNurseryStore(&bitcoinTestnetGenesis, cdb)
 	if err != nil {
 		t.Fatalf("unable to open nursery store: %v", err)
 	}

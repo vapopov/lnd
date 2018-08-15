@@ -19,6 +19,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lightning-onion"
 	"github.com/lightningnetwork/lnd/autopilot"
+	"github.com/lightningnetwork/lnd/breacharbiter"
 	"github.com/lightningnetwork/lnd/brontide"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/contractcourt"
@@ -27,6 +28,7 @@ import (
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
+	"github.com/lightningnetwork/lnd/nursery"
 	"github.com/lightningnetwork/lnd/routing"
 	"github.com/lightningnetwork/lnd/strayoutputpool"
 	"github.com/lightningnetwork/lnd/tor"
@@ -123,13 +125,13 @@ type server struct {
 
 	witnessBeacon contractcourt.WitnessBeacon
 
-	breachArbiter *breachArbiter
+	breachArbiter *breacharbiter.BreachArbiter
 
 	chanRouter *routing.ChannelRouter
 
 	authGossiper *discovery.AuthenticatedGossiper
 
-	utxoNursery *utxoNursery
+	utxoNursery *nursery.UtxoNursery
 
 	chainArb *contractcourt.ChainArbitrator
 
@@ -458,32 +460,31 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 	}
 
 	// Create outputs pool manager responsible for gathering outputs and
-	// merging them to one transaction
+	// merging them to one transaction.
 	s.strayOutputsPool = strayoutputpool.NewDBStrayOutputsPool(&strayoutputpool.PoolConfig{
 		DB:   chanDB,
 		Estimator: s.cc.feeEstimator,
 		GenSweepScript: func() ([]byte, error) {
-			return newSweepPkScript(cc.wallet)
+			return lnwallet.NewSweepPkScript(cc.wallet)
 		},
 		Notifier:           cc.chainNotifier,
 		PublishTransaction: cc.wallet.PublishTransaction,
 		Signer:             cc.wallet.Cfg.Signer,
-		DustLimit: 			lnwallet.DefaultDustLimit(),
 	})
 
-	utxnStore, err := newNurseryStore(activeNetParams.GenesisHash, chanDB)
+	utxnStore, err := nursery.NewNurseryStore(activeNetParams.GenesisHash, chanDB)
 	if err != nil {
 		srvrLog.Errorf("unable to create nursery store: %v", err)
 		return nil, err
 	}
 
-	s.utxoNursery = newUtxoNursery(&NurseryConfig{
+	s.utxoNursery = nursery.NewUtxoNursery(&nursery.NurseryConfig{
 		ChainIO:   cc.chainIO,
 		ConfDepth: 1,
 		DB:        chanDB,
 		Estimator: cc.feeEstimator,
 		GenSweepScript: func() ([]byte, error) {
-			return newSweepPkScript(cc.wallet)
+			return lnwallet.NewSweepPkScript(cc.wallet)
 		},
 		CutStrayInput: func(feeRate lnwallet.SatPerVByte,
 			input lnwallet.SpendableOutput) bool {
@@ -506,7 +507,7 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 
 	// We will use the following channel to reliably hand off contract
 	// breach events from the ChannelArbitrator to the breachArbiter,
-	contractBreaches := make(chan *ContractBreachEvent, 1)
+	contractBreaches := make(chan *breacharbiter.ContractBreachEvent, 1)
 
 	s.chainArb = contractcourt.NewChainArbitrator(contractcourt.ChainArbitratorConfig{
 		ChainHash: *activeNetParams.GenesisHash,
@@ -514,7 +515,7 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 		//  * needs to be << or specified final hop time delta
 		BroadcastDelta: defaultBroadcastDelta,
 		NewSweepAddr: func() ([]byte, error) {
-			return newSweepPkScript(cc.wallet)
+			return lnwallet.NewSweepPkScript(cc.wallet)
 		},
 		CutStrayInput: func(feeRate lnwallet.SatPerVByte,
 			input lnwallet.SpendableOutput) bool {
@@ -566,7 +567,7 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 		},
 		ContractBreach: func(chanPoint wire.OutPoint,
 			breachRet *lnwallet.BreachRetribution) error {
-			event := &ContractBreachEvent{
+			event := &breacharbiter.ContractBreachEvent{
 				ChanPoint:         chanPoint,
 				ProcessACK:        make(chan error, 1),
 				BreachRetribution: breachRet,
@@ -589,24 +590,26 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 		},
 	}, chanDB)
 
-	s.breachArbiter = newBreachArbiter(&BreachConfig{
-		CloseLink: closeLink,
-		DB:        chanDB,
-		Estimator: s.cc.feeEstimator,
-		CutStrayInput: func(feeRate lnwallet.SatPerVByte,
-			input lnwallet.SpendableOutput) bool {
-			return strayoutputpool.CutStrayInput(s.strayOutputsPool,
-				feeRate, input)
+	s.breachArbiter = breacharbiter.NewBreachArbiter(
+		&breacharbiter.BreachConfig{
+			CloseLink: closeLink,
+			DB:        chanDB,
+			Estimator: s.cc.feeEstimator,
+			CutStrayInput: func(feeRate lnwallet.SatPerVByte,
+				input lnwallet.SpendableOutput) bool {
+				return strayoutputpool.CutStrayInput(s.strayOutputsPool,
+					feeRate, input)
+			},
+			GenSweepScript: func() ([]byte, error) {
+				return lnwallet.NewSweepPkScript(cc.wallet)
+			},
+			Notifier:           cc.chainNotifier,
+			PublishTransaction: cc.wallet.PublishTransaction,
+			ContractBreaches:   contractBreaches,
+			Signer:             cc.wallet.Cfg.Signer,
+			Store:              breacharbiter.NewRetributionStore(chanDB),
 		},
-		GenSweepScript: func() ([]byte, error) {
-			return newSweepPkScript(cc.wallet)
-		},
-		Notifier:           cc.chainNotifier,
-		PublishTransaction: cc.wallet.PublishTransaction,
-		ContractBreaches:   contractBreaches,
-		Signer:             cc.wallet.Cfg.Signer,
-		Store:              newRetributionStore(chanDB),
-	})
+	)
 
 	// Create the connection manager which will be responsible for
 	// maintaining persistent outbound connections and also accepting new

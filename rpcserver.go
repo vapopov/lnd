@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lightningnetwork/lnd/nursery"
 	"gopkg.in/macaroon-bakery.v2/bakery"
 
 	"sync"
@@ -1488,7 +1489,7 @@ func (r *rpcServer) PendingChannels(ctx context.Context,
 			// channel. If we didn't have any time-locked outputs,
 			// then the nursery may not know of the contract.
 			nurseryInfo, err := r.server.utxoNursery.NurseryReport(&chanPoint)
-			if err != nil && err != ErrContractNotFound {
+			if err != nil && err != nursery.ErrContractNotFound {
 				return nil, fmt.Errorf("unable to obtain "+
 					"nursery report for ChannelPoint(%v): %v",
 					chanPoint, err)
@@ -1499,9 +1500,9 @@ func (r *rpcServer) PendingChannels(ctx context.Context,
 			// funds are time locked and also the height in which
 			// we can ultimately sweep the funds into the wallet.
 			if nurseryInfo != nil {
-				forceClose.LimboBalance = int64(nurseryInfo.limboBalance)
-				forceClose.RecoveredBalance = int64(nurseryInfo.recoveredBalance)
-				forceClose.MaturityHeight = nurseryInfo.maturityHeight
+				forceClose.LimboBalance = int64(nurseryInfo.LimboBalance)
+				forceClose.RecoveredBalance = int64(nurseryInfo.RecoveredBalance)
+				forceClose.MaturityHeight = nurseryInfo.MaturityHeight
 
 				// If the transaction has been confirmed, then
 				// we can compute how many blocks it has left.
@@ -1511,16 +1512,16 @@ func (r *rpcServer) PendingChannels(ctx context.Context,
 							currentHeight
 				}
 
-				for _, htlcReport := range nurseryInfo.htlcs {
+				for _, htlcReport := range nurseryInfo.Htlcs {
 					// TODO(conner) set incoming flag
 					// appropriately after handling incoming
 					// incubation
 					htlc := &lnrpc.PendingHTLC{
 						Incoming:       false,
-						Amount:         int64(htlcReport.amount),
-						Outpoint:       htlcReport.outpoint.String(),
-						MaturityHeight: htlcReport.maturityHeight,
-						Stage:          htlcReport.stage,
+						Amount:         int64(htlcReport.Amount),
+						Outpoint:       htlcReport.Outpoint.String(),
+						MaturityHeight: htlcReport.MaturityHeight,
+						Stage:          htlcReport.Stage,
 					}
 
 					if htlc.MaturityHeight != 0 {
@@ -1533,7 +1534,7 @@ func (r *rpcServer) PendingChannels(ctx context.Context,
 						htlc)
 				}
 
-				resp.TotalLimboBalance += int64(nurseryInfo.limboBalance)
+				resp.TotalLimboBalance += int64(nurseryInfo.LimboBalance)
 			}
 
 			resp.PendingForceClosingChannels = append(
