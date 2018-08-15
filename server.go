@@ -516,6 +516,11 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 		NewSweepAddr: func() ([]byte, error) {
 			return newSweepPkScript(cc.wallet)
 		},
+		CutStrayInput: func(feeRate lnwallet.SatPerVByte,
+			input lnwallet.SpendableOutput) bool {
+			return strayoutputpool.CutStrayInput(s.strayOutputsPool,
+				feeRate, input)
+		},
 		PublishTx: cc.wallet.PublishTransaction,
 		DeliverResolutionMsg: func(msgs ...contractcourt.ResolutionMsg) error {
 			for _, msg := range msgs {
