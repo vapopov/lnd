@@ -677,7 +677,7 @@ func makeBreachedOutput(outpoint *wire.OutPoint,
 
 	return breachedOutput{
 		secondLevelWitnessScript: secondLevelScript,
-		BaseOutput: lnwallet.NewBaseOutput(btcutil.Amount(amount), outpoint,
+		BaseOutput: lnwallet.NewBaseOutput(btcutil.Amount(amount), *outpoint,
 			witnessType, *signDescriptor),
 	}
 }
